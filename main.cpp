@@ -1,3 +1,5 @@
+//Created by Mark H on 6/1/15
+//Do whatever you want with this code
 #include "wfLZ.h"
 #include <iostream>
 #include <vector>
@@ -22,53 +24,76 @@ bool g_bPieceTogether;
 bool g_bColOnly;
 bool g_bMulOnly;
 
-//Top of ANB file
-typedef struct
-{
-	uint32_t unknown0;
-	uint32_t unknown1;
-	uint32_t numImages;
-	uint32_t unknown2;
-	uint32_t unknown3; 	//Always 0x00 01 A0 01 ?
-	uint32_t frameHeaderOffset;	//point to frameHeader
-}anbHeader;
-
-//Repeat for anbHeader.numImages
-typedef struct
-{
-	uint32_t texDescOffset;	//Point to texDesc
-}frameHeader;
-
-typedef struct
-{
-	float minx;				//Size of reconstructed image after piecing
-	float maxx;				//	|
-	float miny;				//	|
-	float maxy;				//	V
-	uint32_t img_offset;	//Point to texHeader
-	uint32_t unknown0;		//Probably image size or something
-	uint32_t pieceOffset;	//Point to PiecesDesc
-}texDesc;
-
-typedef struct
-{
-	uint32_t numPieces;
-	//piece[]	//Followed by numPieces pieces
-} piecesDesc;
-
 typedef struct
 {
 	uint32_t type;
-	uint32_t unk[3];
+	uint32_t numChildren;
+	uint64_t childPtr;	//Points to a list of numChildren childNodePtrs
+	//Followed by additional info depending on type
+}dataVert;
+
+typedef struct
+{
+	uint64_t offset;	//Points to next child dataVert
+}childNodePtr;
+
+//Different values for dataVert.type
+#define VERT_TYPE_NONE			0
+#define VERT_TYPE_TEX			1
+#define VERT_TYPE_VBO			2
+#define VERT_TYPE_PROP			3
+#define VERT_TYPE_PROP_SCALAR	4
+#define VERT_TYPE_PROP_PT		5
+#define VERT_TYPE_PROP_ANCHOR	6
+#define VERT_TYPE_PROP_RECT		7
+#define VERT_TYPE_PROP_STR		8
+#define VERT_TYPE_PROP_TAB		9
+#define VERT_TYPE_FRAME			10
+#define VERT_TYPE_SEQ_FRAME		11
+#define VERT_TYPE_SEQ			12
+#define VERT_TYPE_ANIM			13
+
+//Top of ANB file
+typedef struct
+{
+	uint8_t sig[4];			//Should be "YCSN"
+	uint32_t unknown1;		//Always 0
+	uint32_t unknown2;		//Always 1
+	uint32_t unknown3[3];	//All 0
+	dataVert head;			//Root of our data tree
+}anbHeader;
+
+//Additional info following dataVert if dataVert.type == VERT_TYPE_TEX
+typedef struct
+{
 	uint32_t width;
 	uint32_t height;
-	uint32_t bpp;
-	uint32_t unk1;
-	uint32_t decompSize;	//Maybe?
-	uint32_t unk2[2];		//0, then 0xFFFFFF, so maybe second part is RGB mask?
-	uint32_t compressedSize;	//Maybe?
-	//uint8_t data[]
+	uint32_t flags;
+	uint32_t unk;
+	uint64_t dataPtr;	//Point to texHeader
+}texVert;
+
+//Additional info following dataVert if dataVert.type == VERT_TYPE_VBO
+typedef struct
+{
+	uint32_t num;
+	uint32_t flags;
+	uint64_t dataPtr;	//Point to pieceHeader
+}vboVert;
+
+typedef struct
+{
+	uint32_t unk;				//0xFFFFFF, so maybe RGB mask?
+	uint32_t compressedSize;	//Maybe? We don't care, anyway
+	//uint8_t data[]			//Followed by WFLZ-compressed image data
 } texHeader;
+
+typedef struct
+{
+	uint32_t unk; 	//Always 0xFFFFFF
+	uint32_t size;	//32 if num pieces = 1, 64 if num pieces = 2, etc
+	//piece[]		//followed by vboVert.num pieces
+}pieceHeader;
 
 typedef struct
 {
@@ -78,12 +103,13 @@ typedef struct
 
 typedef struct 
 {
-	Vec2 topLeft;
-	Vec2 topLeftUV;
-	Vec2 bottomRight;
-	Vec2 bottomRightUV;
+	Vec2 topRight;
+	Vec2 bottomLeft;
+	Vec2 topRightUV;
+	Vec2 bottomLeftUV;
 } piece;
 
+//Helper struct for filling out a FIBITMAP
 typedef struct
 {
 	uint8_t r;
@@ -92,12 +118,10 @@ typedef struct
 	uint8_t a;
 } pixel;
 
-#define PALETTE_SIZE					256
 
-#define TEXTURE_TYPE_RAW				0	//No additional compression
-#define TEXTURE_TYPE_256_COL			1	//256-color 4bpp palette followed by pixel data
-#define TEXTURE_TYPE_DXT1_COL			2	//squish::kDxt1 color, no multiply
-#define TEXTURE_TYPE_DXT5_COL			3	//squish::kDxt5 color, no multiply
+//-------------------------------------------------------------------------------------------------------
+// Functions
+//-------------------------------------------------------------------------------------------------------
 
 int powerof2(int orig)
 {
@@ -135,7 +159,7 @@ FIBITMAP* imageFromPixels(uint8_t* imgData, uint32_t width, uint32_t height)
 	return curImg;
 }
 
-FIBITMAP* PieceImage(uint8_t* imgData, list<piece> pieces, Vec2 maxul, Vec2 maxbr, texHeader th)
+/*FIBITMAP* PieceImage(uint8_t* imgData, list<piece> pieces, Vec2 maxul, Vec2 maxbr, texVert th)
 {
 	Vec2 OutputSize;
 	Vec2 CenterPos;
@@ -201,6 +225,125 @@ FIBITMAP* PieceImage(uint8_t* imgData, list<piece> pieces, Vec2 maxul, Vec2 maxb
 	FreeImage_Unload(result);
 	
 	return cropped;
+}*/
+
+list<piece> imgPieces;
+texVert imgHeader;
+int iCurFile;
+string sCurFileName;
+
+void saveCurImage(uint8_t* data)
+{
+	if(!imgPieces.size()) return;	//Sanity check if first image
+	
+	//Decompress WFLZ data - one pass now, no chunks
+	const uint32_t decompressedSize = wfLZ_GetDecompressedSize(&(data[imgHeader.dataPtr+sizeof(texHeader)]));
+	uint8_t* dst = (uint8_t*)malloc(decompressedSize);
+	wfLZ_Decompress(&(data[imgHeader.dataPtr+sizeof(texHeader)]), dst);
+	
+	ostringstream oss;
+	oss << "output/" << sCurFileName << '/' << setfill('0') << setw(3) << iCurFile+1 << ".png";
+	cout << "Saving " << oss.str() << endl;
+	
+	//TODO: Piece together
+	FIBITMAP* result = imageFromPixels(dst, imgHeader.width, imgHeader.height);
+	
+	FreeImage_Save(FIF_PNG, result, oss.str().c_str());
+	
+	//FILE* fOut = fopen(oss.str().c_str(), "wb");
+	//fwrite(dst, sizeof(uint8_t), decompressedSize, fOut);
+	
+	//Free allocated memory
+	FreeImage_Unload(result);
+	free(dst);
+	
+	iCurFile++;
+	imgPieces.clear();	//New frame, new pieces
+}
+
+void checkVert(dataVert v, uint8_t* data, uint32_t offset)
+{
+	uint32_t nodeExtOffset = offset + sizeof(dataVert);
+	switch(v.type)
+	{
+		case VERT_TYPE_NONE:
+			//cout << endl;
+			break;
+			
+		case VERT_TYPE_TEX:
+		{
+			texVert tv;
+			memcpy(&tv, &(data[nodeExtOffset]), sizeof(texVert));
+			imgHeader = tv;	//Save header
+			//cout << "texVert - width: " << tv.width << ", height: " << tv.height << ", flags: " << tv.flags << ", data ptr: 0x" << std::hex << tv.dataPtr << endl;
+			//cout << std::dec;
+		}
+		break;
+		
+		case VERT_TYPE_VBO:
+		{
+			vboVert vv;
+			memcpy(&vv, &(data[nodeExtOffset]), sizeof(vboVert));
+			//cout << "vboVert - num: " << vv.num << ", flags: " << vv.flags << ", offset: 0x" << std::hex << vv.dataPtr << endl;
+			//cout << std::dec;
+			
+			pieceHeader ph;
+			memcpy(&ph, &(data[vv.dataPtr]), sizeof(pieceHeader));
+			
+			for(int i = 0; i < vv.num; i++)
+			{
+				piece p;
+				memcpy(&p, &(data[vv.dataPtr+sizeof(pieceHeader)+i*sizeof(piece)]), sizeof(piece));
+				
+				//Store piece
+				imgPieces.push_back(p);
+			}
+		}
+		break;
+		
+		case VERT_TYPE_FRAME:
+		{
+			saveCurImage(data);	//Save our last image (works because we're traversing depth-first)
+		}
+		break;
+		
+		default:
+			//cout << endl;
+			break;
+	}
+}
+
+void tabLevel(int level)
+{
+	for(int i = 0; i < level; i++)
+		cout << '\t';
+}
+
+//Recursively dig through children of this vertex
+void iterateChild(uint8_t* data, dataVert v, int level, uint32_t offset)
+{
+	//tabLevel(level);
+	//cout << "Vert: type: " << v.type << ", num children: " << v.numChildren << endl;
+	//tabLevel(level);
+	checkVert(v, data, offset);
+	//if(v.numChildren)
+	//{
+	//	tabLevel(level);
+	//	cout << "Children:" << endl;
+	//}
+	for(int i = 0; i < v.numChildren; i++)	//Base case: number of children = 0
+	{
+		dataVert vChild;
+		childNodePtr cp;
+		
+		memcpy(&cp, &(data[v.childPtr+(i*sizeof(childNodePtr))]), sizeof(childNodePtr));
+		memcpy(&vChild, &(data[cp.offset]), sizeof(dataVert));
+		
+		iterateChild(data, vChild, level+1, cp.offset);
+	}
+	
+	//tabLevel(level);
+	//cout << "end Vert" << endl;
 }
 
 int splitImages(const char* cFilename)
@@ -233,17 +376,6 @@ int splitImages(const char* cFilename)
 		namepos = sName.rfind('\\');
 	if(namepos != string::npos)
 		sName.erase(0, namepos+1);
-	
-	/*for(int i = 0; i < 256; i++)
-	{
-		float f;
-		memcpy(&f, &fileData[i*4], sizeof(float));
-		uint32_t j;
-		memcpy(&j, &fileData[i*4], sizeof(uint32_t));
-		
-		cout << i*4 << ": " << f << ", " << j << endl;
-	}
-	return 0;*/
 		
 	//Create the folder we'll be saving into
 	#ifdef _WIN32
@@ -255,11 +387,18 @@ int splitImages(const char* cFilename)
 	#endif
 		
 	//Read file header
-	/*anbHeader ah;
-	memcpy(&ah, fileData, sizeof(anbHeader));*/
+	anbHeader ah;
+	memcpy(&ah, fileData, sizeof(anbHeader));
+	
+	//Cycle through ANB data pointer tree
+	iCurFile = 0;
+	imgPieces.clear();
+	sCurFileName = sName;
+	iterateChild(fileData, ah.head, 0, 16);		//Workhorse: Spin through ANB data tree
+	saveCurImage(fileData);	//Save our last image left
 	
 	//Parse through, splitting out before each WFLZ header
-	int iCurFile = 0;
+	/*int iCurFile = 0;
 	uint64_t startPos = 0;
 	for(uint64_t i = 0; i < fileSize; i++)	//Definitely not the fastest way to do it... but I don't care
 	{
@@ -268,6 +407,9 @@ int splitImages(const char* cFilename)
 			uint64_t headerPos = i - sizeof(texHeader);
 			texHeader th;
 			memcpy(&th, &(fileData[headerPos]), sizeof(texHeader));
+			
+			//if(th.type != TEXTURE_TYPE_RAW)
+			//	cout << "Warning: TexHeader type " << th.type << endl;
 			
 			//cout << "WFLZ header " << iCurFile+1 << " found. TexHeader type: " << th.type << ", width: " << th.width << ", height: " << th.height << ", bpp: " << th.bpp << ", decompSize: " << th.decompSize << ", compressedSize: " << th.compressedSize << endl;
 			
@@ -278,7 +420,7 @@ int splitImages(const char* cFilename)
 			wfLZ_Decompress(&(fileData)[i], dst);
 			
 			ostringstream oss;
-			oss << sName << "/" << setfill('0') << setw(3) << iCurFile+1 << ".png";
+			oss << "output/" << sName << '/' << setfill('0') << setw(3) << iCurFile+1 << ".png";
 			cout << "Saving " << oss.str() << endl;
 			
 			FIBITMAP* result = imageFromPixels(dst, th.width, th.height);
@@ -298,7 +440,7 @@ int splitImages(const char* cFilename)
 			
 			iCurFile++;
 		}
-	}
+	}*/
 	delete[] fileData;
 	return 0;
 }
