@@ -313,10 +313,10 @@ void checkVert(dataVert v, uint8_t* data, uint32_t offset)
 				memcpy(&p, &(data[vv.dataPtr+sizeof(pieceHeader)+i*sizeof(piece)]), sizeof(piece));
 				
 				//Coordinates are scaled; multiply by 10 and hope it works
-				p.topRight.x *= 10.0f;
-				p.topRight.y *= 10.0f;
-				p.bottomLeft.x *= 10.0f;
-				p.bottomLeft.y *= 10.0f;
+				p.topRight.x = (int)(p.topRight.x * 10.0f + 0.5f);
+				p.topRight.y = (int)(p.topRight.y * 10.0f + 0.5f);
+				p.bottomLeft.x = (int)(p.bottomLeft.x * 10.0f + 0.5f);
+				p.bottomLeft.y = (int)(p.bottomLeft.y * 10.0f + 0.5f);
 				
 				//Store piece
 				imgPieces.push_back(p);
