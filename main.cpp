@@ -99,6 +99,15 @@ typedef struct
 	float delay;
 }frame;
 
+//Additional info following dataVert if dataVert.type == VERT_TYPE_FRAME
+typedef struct
+{
+	float minx;
+	float maxx;
+	float miny;
+	float maxy;
+}frameVert;
+
 typedef struct
 {
 	uint32_t unk;				//0xFFFFFF, so maybe RGB mask?
@@ -137,13 +146,13 @@ typedef struct
 } pixel;
 
 
-
+vector<frameVert> animSizes;	//How large the largest piece in every anim is
 vector<list<piece> > imgPieces;
 vector<texVert> imgHeader;
 int iNumFiles;
 string sCurFileName;
-Vec2 maxul;
-Vec2 maxbr;
+//Vec2 maxul;
+//Vec2 maxbr;
 int iNumFrameSequences;
 vector<list<frame> > frameSequences;
 
@@ -278,17 +287,20 @@ FIBITMAP* decompressFrame(uint8_t* data, int iFile)
 	uint8_t* dst = (uint8_t*)malloc(decompressedSize);
 	wfLZ_Decompress(&(data[imgHeader[iFile].dataPtr+sizeof(texHeader)]), dst);
 	
-	//ostringstream oss;
-	//oss << "output/" << sCurFileName << '/' << setfill('0') << setw(3) << iFile+1 << ".png";
-	//cout << "Saving " << oss.str() << endl;
-	
 	//Piece together
-	FIBITMAP* result = PieceImage(dst, imgPieces[iFile], maxul, maxbr, imgHeader[iFile]);//imageFromPixels(dst, imgHeader.width, imgHeader.height);
+	frameVert fv = animSizes[iFile];
+	Vec2 maxUL;
+	Vec2 maxBR;
+	maxUL.x = fv.minx;
+	maxUL.y = fv.maxy;
+	maxBR.x = fv.maxx;
+	maxBR.y = fv.miny;
 	
-	//FreeImage_Save(FIF_PNG, result, oss.str().c_str());
+	//cout << "maxUL: " << maxUL.x << ", " << maxUL.y << " " << maxBR.x << ", " << maxBR.y << endl;
+	//cout << "maxul: " << maxul.x << ", " << maxul.y << " " << maxbr.x << ", " << maxbr.y << endl;
 	
-	//Free allocated memory
-	//FreeImage_Unload(result);
+	FIBITMAP* result = PieceImage(dst, imgPieces[iFile], maxUL, maxBR, imgHeader[iFile]);
+	
 	free(dst);
 	return result;
 }
@@ -365,8 +377,15 @@ void checkVert(dataVert v, uint8_t* data, uint32_t offset)
 		break;
 		
 		case VERT_TYPE_FRAME:
+		{
 			iNumFiles++;
-			break;
+			
+			//frameVert fv;
+			//memcpy(&fv, &(data[nodeExtOffset]), sizeof(frameVert));
+			
+			//cout << "FrameVert - minx: " << fv.minx << ", maxx: " << fv.maxx << ", miny: " << fv.miny << ", maxy: " << fv.maxy << endl;
+		}
+		break;
 		
 		default:
 			break;
@@ -445,15 +464,57 @@ int splitImages(const char* cFilename)
 	imgPieces.clear();
 	imgHeader.clear();
 	sCurFileName = sName;
-	maxul.x = maxul.y = maxbr.x = maxbr.y = 0;
+	//maxul.x = maxul.y = maxbr.x = maxbr.y = 0;
 	iNumFiles = 0;
 	frameSequences.clear();
 	iNumFrameSequences = 0;
 	iterateChild(fileData, ah.head, 0, 16);		//Workhorse: Spin through ANB data tree
 	
+	animSizes.reserve(imgPieces.size());
 	for(int iCurFile = 0; iCurFile < iNumFiles; iCurFile++)
 	{
+		frameVert fv;
+		fv.minx = fv.maxx = fv.miny = fv.maxy = 0;
+		animSizes[iCurFile] = fv;
+	}
+	for(int i = 0; i < iNumFrameSequences; i++)
+	{
 		//Figure out pieces
+		frameVert fv;
+		fv.minx = fv.maxx = fv.miny = fv.maxy = 0;
+		for(list<frame>::iterator j = frameSequences[i].begin(); j != frameSequences[i].end(); j++)
+		{
+			for(list<piece>::iterator k = imgPieces[j->frameNo].begin(); k != imgPieces[j->frameNo].end(); k++)
+			{
+				//Store our maximum values, so we know how large the image is
+				if(k->bottomLeft.x < fv.minx)
+					fv.minx = k->bottomLeft.x;
+				if(k->topRight.y > fv.maxy)
+					fv.maxy = k->topRight.y;
+				if(k->topRight.x > fv.maxx)
+					fv.maxx = k->topRight.x;
+				if(k->bottomLeft.y < fv.miny)
+					fv.miny = k->bottomLeft.y;
+			}
+		}
+		for(list<frame>::iterator j = frameSequences[i].begin(); j != frameSequences[i].end(); j++)
+		{
+			if(fv.minx < animSizes[j->frameNo].minx)
+				animSizes[j->frameNo].minx = fv.minx;
+			if(fv.miny < animSizes[j->frameNo].miny)
+				animSizes[j->frameNo].miny = fv.miny;
+			if(fv.maxx > animSizes[j->frameNo].maxx)
+				animSizes[j->frameNo].maxx = fv.maxx;
+			if(fv.maxy > animSizes[j->frameNo].maxy)
+				animSizes[j->frameNo].maxy = fv.maxy;
+			
+			//animSizes[j->frameNo] = fv;
+		}
+		
+	}
+	
+	/*for(int iCurFile = 0; iCurFile < iNumFiles; iCurFile++)
+	{
 		for(list<piece>::iterator i = imgPieces[iCurFile].begin(); i != imgPieces[iCurFile].end(); i++)
 		{
 			//Store our maximum values, so we know how large the image is
@@ -466,7 +527,7 @@ int splitImages(const char* cFilename)
 			if(i->bottomLeft.y < maxbr.y)
 				maxbr.y = i->bottomLeft.y;
 		}
-	}
+	}*/
 	
 	//Decompress and piece all images up front
 	vector<FIBITMAP*> frameImages;

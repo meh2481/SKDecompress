@@ -1,0 +1,3 @@
+Add paste-able header in upper right or such
+Automatically scale first frame and crop to be TSR size, for easy upload
+Detect if only one image, and just spit that out
