@@ -159,7 +159,7 @@ FIBITMAP* imageFromPixels(uint8_t* imgData, uint32_t width, uint32_t height)
 	return curImg;
 }
 
-/*FIBITMAP* PieceImage(uint8_t* imgData, list<piece> pieces, Vec2 maxul, Vec2 maxbr, texVert th)
+FIBITMAP* PieceImage(uint8_t* imgData, list<piece> pieces, Vec2 maxul, Vec2 maxbr, texVert th)
 {
 	Vec2 OutputSize;
 	Vec2 CenterPos;
@@ -170,7 +170,7 @@ FIBITMAP* imageFromPixels(uint8_t* imgData, uint32_t width, uint32_t height)
 	OutputSize.x = uint32_t(OutputSize.x);
 	OutputSize.y = uint32_t(OutputSize.y);
 
-	//My math seems off, so rather than solving the problem, create larger than needed then crop. Hooray!
+	//My math seems off, so rather than solving the problem, create larger than needed, then crop. Hooray!
 	FIBITMAP* result = FreeImage_Allocate(OutputSize.x+6, OutputSize.y+6, 32);
 
 	//Create image from this set of pixels
@@ -180,8 +180,8 @@ FIBITMAP* imageFromPixels(uint8_t* imgData, uint32_t width, uint32_t height)
 	for(list<piece>::iterator lpi = pieces.begin(); lpi != pieces.end(); lpi++)
 	{
 		FIBITMAP* imgPiece = FreeImage_Copy(curImg, 
-											(int)((lpi->topLeftUV.x) * th.width + 0.5), (int)((lpi->topLeftUV.y) * th.height + 0.5), 
-											(int)((lpi->bottomRightUV.x) * th.width + 0.5), (int)((lpi->bottomRightUV.y) * th.height + 0.5));
+											(int)((lpi->bottomLeftUV.x) * th.width + 0.5), (int)((lpi->topRightUV.y) * th.height + 0.5), 
+											(int)((lpi->topRightUV.x) * th.width + 0.5), (int)((lpi->bottomLeftUV.y) * th.height + 0.5));
 		
 		//Since pasting doesn't allow you to post an image onto a particular position of another, do that by hand
 		int curPos = 0;
@@ -192,10 +192,10 @@ FIBITMAP* imageFromPixels(uint8_t* imgData, uint32_t width, uint32_t height)
 		BYTE* bits = (BYTE*)FreeImage_GetBits(imgPiece);
 		BYTE* destBits = (BYTE*)FreeImage_GetBits(result);
 		Vec2 DestPos = CenterPos;
-		DestPos.x += lpi->topLeft.x;
+		DestPos.x += lpi->bottomLeft.x;
 		DestPos.y = OutputSize.y - srcH;
 		DestPos.y -= CenterPos.y;
-		DestPos.y += lpi->topLeft.y;
+		DestPos.y += lpi->topRight.y;
 		DestPos.x = (unsigned int)(DestPos.x);
 		DestPos.y = ceil(DestPos.y);
 		for(int y = 0; y < srcH; y++)
@@ -225,7 +225,7 @@ FIBITMAP* imageFromPixels(uint8_t* imgData, uint32_t width, uint32_t height)
 	FreeImage_Unload(result);
 	
 	return cropped;
-}*/
+}
 
 list<piece> imgPieces;
 texVert imgHeader;
@@ -236,6 +236,23 @@ void saveCurImage(uint8_t* data)
 {
 	if(!imgPieces.size()) return;	//Sanity check if first image
 	
+	//Figure out pieces
+	Vec2 maxul;
+	Vec2 maxbr;
+	maxul.x = maxul.y = maxbr.x = maxbr.y = 0;
+	for(list<piece>::iterator i = imgPieces.begin(); i != imgPieces.end(); i++)
+	{
+		//Store our maximum values, so we know how large the image is
+		if(i->bottomLeft.x < maxul.x)
+			maxul.x = i->bottomLeft.x;
+		if(i->topRight.y > maxul.y)
+			maxul.y = i->topRight.y;
+		if(i->topRight.x > maxbr.x)
+			maxbr.x = i->topRight.x;
+		if(i->bottomLeft.y < maxbr.y)
+			maxbr.y = i->bottomLeft.y;
+	}
+	
 	//Decompress WFLZ data - one pass now, no chunks
 	const uint32_t decompressedSize = wfLZ_GetDecompressedSize(&(data[imgHeader.dataPtr+sizeof(texHeader)]));
 	uint8_t* dst = (uint8_t*)malloc(decompressedSize);
@@ -245,8 +262,8 @@ void saveCurImage(uint8_t* data)
 	oss << "output/" << sCurFileName << '/' << setfill('0') << setw(3) << iCurFile+1 << ".png";
 	cout << "Saving " << oss.str() << endl;
 	
-	//TODO: Piece together
-	FIBITMAP* result = imageFromPixels(dst, imgHeader.width, imgHeader.height);
+	//Piece together
+	FIBITMAP* result = PieceImage(dst, imgPieces, maxul, maxbr, imgHeader);//imageFromPixels(dst, imgHeader.width, imgHeader.height);
 	
 	FreeImage_Save(FIF_PNG, result, oss.str().c_str());
 	
@@ -295,8 +312,16 @@ void checkVert(dataVert v, uint8_t* data, uint32_t offset)
 				piece p;
 				memcpy(&p, &(data[vv.dataPtr+sizeof(pieceHeader)+i*sizeof(piece)]), sizeof(piece));
 				
+				//Coordinates are scaled; multiply by 10 and hope it works
+				p.topRight.x *= 10.0f;
+				p.topRight.y *= 10.0f;
+				p.bottomLeft.x *= 10.0f;
+				p.bottomLeft.y *= 10.0f;
+				
 				//Store piece
 				imgPieces.push_back(p);
+				
+				//cout << "Piece: " << p.topRight.x << ", " << p.topRight.y << " " << p.bottomLeft.x << ", " << p.bottomLeft.y << " - " << p.topRightUV.x << ", " << p.topRightUV.y << " " << p.bottomLeftUV.x << ", " << p.bottomLeftUV.y << endl;
 			}
 		}
 		break;
