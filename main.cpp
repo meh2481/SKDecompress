@@ -24,6 +24,10 @@ bool g_bPieceTogether;
 bool g_bColOnly;
 bool g_bMulOnly;
 
+int offsetX = 2;
+int offsetY = 2;
+
+
 typedef struct
 {
 	uint32_t type;
@@ -81,6 +85,20 @@ typedef struct
 	uint64_t dataPtr;	//Point to pieceHeader
 }vboVert;
 
+//Additional info following dataVert if dataVert.type == VERT_TYPE_SEQ
+typedef struct
+{
+	uint32_t id;
+	uint32_t numFrames;
+}frameSeq;
+
+//Additional info following dataVert if dataVert.type == VERT_TYPE_SEQ_FRAME
+typedef struct
+{
+	uint32_t frameNo;
+	float delay;
+}frame;
+
 typedef struct
 {
 	uint32_t unk;				//0xFFFFFF, so maybe RGB mask?
@@ -118,6 +136,16 @@ typedef struct
 	uint8_t a;
 } pixel;
 
+
+
+vector<list<piece> > imgPieces;
+vector<texVert> imgHeader;
+int iNumFiles;
+string sCurFileName;
+Vec2 maxul;
+Vec2 maxbr;
+int iNumFrameSequences;
+vector<list<frame> > frameSequences;
 
 //-------------------------------------------------------------------------------------------------------
 // Functions
@@ -227,32 +255,29 @@ FIBITMAP* PieceImage(uint8_t* imgData, list<piece> pieces, Vec2 maxul, Vec2 maxb
 	return cropped;
 }
 
-vector<list<piece> > imgPieces;
-vector<texVert> imgHeader;
-int iNumFiles;
-string sCurFileName;
-Vec2 maxul;
-Vec2 maxbr;
-
-void saveImage(uint8_t* data, int iFile)
+FIBITMAP* decompressFrame(uint8_t* data, int iFile)
 {
+	if(imgPieces.size() <= iFile || imgHeader.size() <= iFile) return NULL;	//Skip if we don't have enough headers...
+	if(imgHeader[iFile].width <= 0 || imgHeader[iFile].height <= 0 || imgHeader[iFile].dataPtr <= 0) return NULL;	//Skip if it's not a legit header
+
 	//Decompress WFLZ data - one pass now, no chunks
 	const uint32_t decompressedSize = wfLZ_GetDecompressedSize(&(data[imgHeader[iFile].dataPtr+sizeof(texHeader)]));
 	uint8_t* dst = (uint8_t*)malloc(decompressedSize);
 	wfLZ_Decompress(&(data[imgHeader[iFile].dataPtr+sizeof(texHeader)]), dst);
 	
-	ostringstream oss;
-	oss << "output/" << sCurFileName << '/' << setfill('0') << setw(3) << iFile+1 << ".png";
-	cout << "Saving " << oss.str() << endl;
+	//ostringstream oss;
+	//oss << "output/" << sCurFileName << '/' << setfill('0') << setw(3) << iFile+1 << ".png";
+	//cout << "Saving " << oss.str() << endl;
 	
 	//Piece together
 	FIBITMAP* result = PieceImage(dst, imgPieces[iFile], maxul, maxbr, imgHeader[iFile]);//imageFromPixels(dst, imgHeader.width, imgHeader.height);
 	
-	FreeImage_Save(FIF_PNG, result, oss.str().c_str());
+	//FreeImage_Save(FIF_PNG, result, oss.str().c_str());
 	
 	//Free allocated memory
-	FreeImage_Unload(result);
+	//FreeImage_Unload(result);
 	free(dst);
+	return result;
 }
 
 void checkVert(dataVert v, uint8_t* data, uint32_t offset)
@@ -268,6 +293,8 @@ void checkVert(dataVert v, uint8_t* data, uint32_t offset)
 		{
 			texVert tv;
 			memcpy(&tv, &(data[nodeExtOffset]), sizeof(texVert));
+			//cout << "texVert - width: " << tv.width << ", height: " << tv.height << ", flags: " << tv.flags << ", data ptr: 0x" << std::hex << tv.dataPtr << endl;
+			//cout << std::dec;
 			imgHeader.push_back(tv);	//Save header
 		}
 		break;
@@ -301,6 +328,29 @@ void checkVert(dataVert v, uint8_t* data, uint32_t offset)
 		}
 		break;
 		
+		case VERT_TYPE_SEQ:
+		{
+			frameSeq fs;
+			memcpy(&fs, &(data[nodeExtOffset]), sizeof(frameSeq));
+			
+			//cout << "Frame seq - ID: " << fs.id << ", # frames: " << fs.numFrames << endl;
+			iNumFrameSequences++;
+			
+			list<frame> fsl;
+			frameSequences.push_back(fsl);
+		}
+		break;
+		
+		case VERT_TYPE_SEQ_FRAME:
+		{
+			frame f;
+			memcpy(&f, &(data[nodeExtOffset]), sizeof(frame));
+			
+			//cout << "Frame - Number: " << f.frameNo << ", Delay: " << f.delay << endl;
+			frameSequences[iNumFrameSequences-1].push_back(f);
+		}
+		break;
+		
 		case VERT_TYPE_FRAME:
 			iNumFiles++;
 			break;
@@ -319,6 +369,8 @@ void tabLevel(int level)
 //Recursively dig through children of this vertex
 void iterateChild(uint8_t* data, dataVert v, int level, uint32_t offset)
 {
+	//tabLevel(level);
+	//cout << "Vert: type: " << v.type << ", num children: " << v.numChildren << endl;
 	checkVert(v, data, offset);
 	for(int i = 0; i < v.numChildren; i++)	//Base case: number of children = 0
 	{
@@ -382,6 +434,8 @@ int splitImages(const char* cFilename)
 	sCurFileName = sName;
 	maxul.x = maxul.y = maxbr.x = maxbr.y = 0;
 	iNumFiles = 0;
+	frameSequences.clear();
+	iNumFrameSequences = 0;
 	iterateChild(fileData, ah.head, 0, 16);		//Workhorse: Spin through ANB data tree
 	
 	for(int iCurFile = 0; iCurFile < iNumFiles; iCurFile++)
@@ -401,10 +455,69 @@ int splitImages(const char* cFilename)
 		}
 	}
 	
-	for(int iCurFile = 0; iCurFile < iNumFiles; iCurFile++)
-		saveImage(fileData, iCurFile);	//Save our images
+	//Decompress and piece all images up front
+	vector<FIBITMAP*> frameImages;
+	for(int i = 0; i < iNumFiles; i++)
+		frameImages.push_back(decompressFrame(fileData, i));
+		
+	//Figure out dimensions of final image
+	int finalX = offsetX;
+	int finalY = offsetY;
+	for(int i = 0; i < iNumFrameSequences; i++)
+	{
+		int animMaxX = offsetX;
+		int animMaxY = 0;
+		for(list<frame>::iterator j = frameSequences[i].begin(); j != frameSequences[i].end(); j++)
+		{
+			if(frameImages[j->frameNo] != NULL)
+			{
+				animMaxX += FreeImage_GetWidth(frameImages[j->frameNo]);
+				if(FreeImage_GetHeight(frameImages[j->frameNo]) > animMaxY)
+					animMaxY = FreeImage_GetHeight(frameImages[j->frameNo]);
+				animMaxX += offsetX;
+			}
+		}
+		if(animMaxX > finalX)
+			finalX = animMaxX;
+		finalY += offsetY + animMaxY;
+	}
 	
+	//Allocate final image, and piece
+	//cout << "Final image: " << finalX << ", " << finalY << endl;
+	FIBITMAP* finalSheet = FreeImage_Allocate(finalX, finalY, 32);
+	RGBQUAD q = {128,128,0,255};
+	FreeImage_FillBackground(finalSheet, (const void *)&q);
 	
+	int curX = offsetX;
+	int curY = offsetY;
+	//Split each animation up into frame sequences
+	for(int i = 0; i < iNumFrameSequences; i++)
+	{
+		int iCurFrame = 0;
+		int animMaxY = 0;
+		for(list<frame>::iterator j = frameSequences[i].begin(); j != frameSequences[i].end(); j++)
+		{
+			if(frameImages[j->frameNo] != NULL)
+			{
+				FreeImage_Paste(finalSheet, frameImages[j->frameNo], curX, curY, 300);
+				curX += offsetX + FreeImage_GetWidth(frameImages[j->frameNo]);
+				if(FreeImage_GetHeight(frameImages[j->frameNo]) > animMaxY)
+					animMaxY = FreeImage_GetHeight(frameImages[j->frameNo]);
+			}
+		}
+		curX = offsetX;
+		curY += animMaxY + offsetY;
+	}
+	ostringstream oss;
+	oss << "output/" << sCurFileName << "_sheet.png";
+	cout << "Saving " << oss.str() << endl;
+	FreeImage_Save(FIF_PNG, finalSheet, oss.str().c_str());
+	
+	//Free our image data
+	for(vector<FIBITMAP*>::iterator i = frameImages.begin(); i != frameImages.end(); i++)
+		FreeImage_Unload(*i);
+	
+	FreeImage_Unload(finalSheet);
 	delete[] fileData;
 	return 0;
 }
