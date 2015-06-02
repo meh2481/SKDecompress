@@ -175,10 +175,21 @@ FIBITMAP* imageFromPixels(uint8_t* imgData, uint32_t width, uint32_t height)
 			BYTE* pixel = (BYTE*)bits;
 			for(int x = 0; x < width; x++)
 			{
-				pixel[FI_RGBA_RED] = imgData[curPos++];
-				pixel[FI_RGBA_GREEN] = imgData[curPos++];
-				pixel[FI_RGBA_BLUE] = imgData[curPos++];
-				pixel[FI_RGBA_ALPHA] = imgData[curPos++];
+				if(imgData[curPos+3] == 0)
+				{
+					pixel[FI_RGBA_RED] = 0;
+					pixel[FI_RGBA_GREEN] = 255;
+					pixel[FI_RGBA_BLUE] = 0;
+					pixel[FI_RGBA_ALPHA] = 255;
+					curPos+=4;
+				}
+				else
+				{
+					pixel[FI_RGBA_RED] = imgData[curPos++];
+					pixel[FI_RGBA_GREEN] = imgData[curPos++];
+					pixel[FI_RGBA_BLUE] = imgData[curPos++];
+					pixel[FI_RGBA_ALPHA] = imgData[curPos++];
+				}
 				pixel += 4;
 			}
 			bits -= pitch;
@@ -200,6 +211,8 @@ FIBITMAP* PieceImage(uint8_t* imgData, list<piece> pieces, Vec2 maxul, Vec2 maxb
 
 	//My math seems off, so rather than solving the problem, create larger than needed, then crop. Hooray!
 	FIBITMAP* result = FreeImage_Allocate(OutputSize.x+6, OutputSize.y+6, 32);
+	RGBQUAD q = {0,255,0,255};
+	FreeImage_FillBackground(result, (const void *)&q);
 
 	//Create image from this set of pixels
 	FIBITMAP* curImg = imageFromPixels(imgData, th.width, th.height);
@@ -458,7 +471,9 @@ int splitImages(const char* cFilename)
 	//Decompress and piece all images up front
 	vector<FIBITMAP*> frameImages;
 	for(int i = 0; i < iNumFiles; i++)
+	{
 		frameImages.push_back(decompressFrame(fileData, i));
+	}
 		
 	//Figure out dimensions of final image
 	int finalX = offsetX;
@@ -511,13 +526,15 @@ int splitImages(const char* cFilename)
 	ostringstream oss;
 	oss << "output/" << sCurFileName << "_sheet.png";
 	cout << "Saving " << oss.str() << endl;
-	FreeImage_Save(FIF_PNG, finalSheet, oss.str().c_str());
+	FIBITMAP* res_24 = FreeImage_ConvertTo24Bits(finalSheet);
+	FreeImage_Save(FIF_PNG, res_24, oss.str().c_str());
 	
 	//Free our image data
 	for(vector<FIBITMAP*>::iterator i = frameImages.begin(); i != frameImages.end(); i++)
 		FreeImage_Unload(*i);
 	
 	FreeImage_Unload(finalSheet);
+	FreeImage_Unload(res_24);
 	delete[] fileData;
 	return 0;
 }
