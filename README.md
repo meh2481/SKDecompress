@@ -1,4 +1,4 @@
-Double Dragon Decompression
+Shovel Knight Decompression
 ======
 
-This space intentionally left blank.
+Rips images from Shovel Knight .anb files and stitches them together. Nuff said.
