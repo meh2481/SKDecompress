@@ -447,13 +447,13 @@ int splitImages(const char* cFilename)
 		sName.erase(0, namepos+1);
 		
 	//Create the folder we'll be saving into
-	#ifdef _WIN32
+	/*#ifdef _WIN32
 		string sOutDir = "output/";
 		sOutDir += sName;
 		CreateDirectory(TEXT(sOutDir.c_str()), NULL);
 	#else
 		#error Do something here to create folder
-	#endif
+	#endif*/
 		
 	//Read file header
 	anbHeader ah;
