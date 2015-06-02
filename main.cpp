@@ -229,7 +229,6 @@ FIBITMAP* PieceImage(uint8_t* imgData, list<piece> pieces, Vec2 maxul, Vec2 maxb
 
 vector<list<piece> > imgPieces;
 vector<texVert> imgHeader;
-//int iCurFile;
 int iNumFiles;
 string sCurFileName;
 Vec2 maxul;
@@ -237,8 +236,6 @@ Vec2 maxbr;
 
 void saveImage(uint8_t* data, int iFile)
 {
-	//if(!imgPieces.size()) return;	//Sanity check if first image
-	
 	//Decompress WFLZ data - one pass now, no chunks
 	const uint32_t decompressedSize = wfLZ_GetDecompressedSize(&(data[imgHeader[iFile].dataPtr+sizeof(texHeader)]));
 	uint8_t* dst = (uint8_t*)malloc(decompressedSize);
@@ -253,15 +250,9 @@ void saveImage(uint8_t* data, int iFile)
 	
 	FreeImage_Save(FIF_PNG, result, oss.str().c_str());
 	
-	//FILE* fOut = fopen(oss.str().c_str(), "wb");
-	//fwrite(dst, sizeof(uint8_t), decompressedSize, fOut);
-	
 	//Free allocated memory
 	FreeImage_Unload(result);
 	free(dst);
-	
-	//iCurFile++;
-	//imgPieces.clear();	//New frame, new pieces
 }
 
 void checkVert(dataVert v, uint8_t* data, uint32_t offset)
@@ -278,8 +269,6 @@ void checkVert(dataVert v, uint8_t* data, uint32_t offset)
 			texVert tv;
 			memcpy(&tv, &(data[nodeExtOffset]), sizeof(texVert));
 			imgHeader.push_back(tv);	//Save header
-			//cout << "texVert - width: " << tv.width << ", height: " << tv.height << ", flags: " << tv.flags << ", data ptr: 0x" << std::hex << tv.dataPtr << endl;
-			//cout << std::dec;
 		}
 		break;
 		
@@ -287,8 +276,6 @@ void checkVert(dataVert v, uint8_t* data, uint32_t offset)
 		{
 			vboVert vv;
 			memcpy(&vv, &(data[nodeExtOffset]), sizeof(vboVert));
-			//cout << "vboVert - num: " << vv.num << ", flags: " << vv.flags << ", offset: 0x" << std::hex << vv.dataPtr << endl;
-			//cout << std::dec;
 			
 			pieceHeader ph;
 			memcpy(&ph, &(data[vv.dataPtr]), sizeof(pieceHeader));
@@ -315,15 +302,10 @@ void checkVert(dataVert v, uint8_t* data, uint32_t offset)
 		break;
 		
 		case VERT_TYPE_FRAME:
-		{
-			//saveCurImage(data);	//Save our last image (works because we're traversing depth-first)
-			//iCurFile++;
 			iNumFiles++;
-		}
-		break;
+			break;
 		
 		default:
-			//cout << endl;
 			break;
 	}
 }
@@ -337,15 +319,7 @@ void tabLevel(int level)
 //Recursively dig through children of this vertex
 void iterateChild(uint8_t* data, dataVert v, int level, uint32_t offset)
 {
-	//tabLevel(level);
-	//cout << "Vert: type: " << v.type << ", num children: " << v.numChildren << endl;
-	//tabLevel(level);
 	checkVert(v, data, offset);
-	//if(v.numChildren)
-	//{
-	//	tabLevel(level);
-	//	cout << "Children:" << endl;
-	//}
 	for(int i = 0; i < v.numChildren; i++)	//Base case: number of children = 0
 	{
 		dataVert vChild;
@@ -356,9 +330,6 @@ void iterateChild(uint8_t* data, dataVert v, int level, uint32_t offset)
 		
 		iterateChild(data, vChild, level+1, cp.offset);
 	}
-	
-	//tabLevel(level);
-	//cout << "end Vert" << endl;
 }
 
 int splitImages(const char* cFilename)
@@ -406,7 +377,6 @@ int splitImages(const char* cFilename)
 	memcpy(&ah, fileData, sizeof(anbHeader));
 	
 	//Cycle through ANB data pointer tree
-	//iCurFile = -1;
 	imgPieces.clear();
 	imgHeader.clear();
 	sCurFileName = sName;
@@ -434,50 +404,7 @@ int splitImages(const char* cFilename)
 	for(int iCurFile = 0; iCurFile < iNumFiles; iCurFile++)
 		saveImage(fileData, iCurFile);	//Save our images
 	
-	//Parse through, splitting out before each WFLZ header
-	/*int iCurFile = 0;
-	uint64_t startPos = 0;
-	for(uint64_t i = 0; i < fileSize; i++)	//Definitely not the fastest way to do it... but I don't care
-	{
-		if(memcmp ( &(fileData[i]), "WFLZ", 4 ) == 0)	//Found another file
-		{
-			uint64_t headerPos = i - sizeof(texHeader);
-			texHeader th;
-			memcpy(&th, &(fileData[headerPos]), sizeof(texHeader));
-			
-			//if(th.type != TEXTURE_TYPE_RAW)
-			//	cout << "Warning: TexHeader type " << th.type << endl;
-			
-			//cout << "WFLZ header " << iCurFile+1 << " found. TexHeader type: " << th.type << ", width: " << th.width << ", height: " << th.height << ", bpp: " << th.bpp << ", decompSize: " << th.decompSize << ", compressedSize: " << th.compressedSize << endl;
-			
-			//Decompress WFLZ data - one pass now, no chunks
-			uint32_t* chunk = NULL;
-			const uint32_t decompressedSize = wfLZ_GetDecompressedSize(&(fileData[i]));
-			uint8_t* dst = (uint8_t*)malloc(decompressedSize);
-			wfLZ_Decompress(&(fileData)[i], dst);
-			
-			ostringstream oss;
-			oss << "output/" << sName << '/' << setfill('0') << setw(3) << iCurFile+1 << ".png";
-			cout << "Saving " << oss.str() << endl;
-			
-			FIBITMAP* result = imageFromPixels(dst, th.width, th.height);
-			
-			FreeImage_Save(FIF_PNG, result, oss.str().c_str());
-			
-			//FILE* fOut = fopen(oss.str().c_str(), "wb");
-			//fwrite(dst, sizeof(uint8_t), decompressedSize, fOut);
-			
-			//Free allocated memory
-			FreeImage_Unload(result);
-			free(dst);
-			//fclose(fOut);
-			//free(dest_final);
-			//free(color);
-			//free(mul);
-			
-			iCurFile++;
-		}
-	}*/
+	
 	delete[] fileData;
 	return 0;
 }
@@ -499,40 +426,7 @@ int main(int argc, char** argv)
 	for(int i = 1; i < argc; i++)
 	{
 		string s = argv[i];
-		if(s == "-0")
-			g_DecompressFlags = 0;
-		else if(s == "-1")
-			g_DecompressFlags = 1;
-		else if(s == "-2")
-			g_DecompressFlags = 2;
-		else if(s == "-3")
-			g_DecompressFlags = 3;
-		else if(s == "-4")
-			g_DecompressFlags = 4;
-		else if(s == "-5")
-			g_DecompressFlags = 5;
-		else if(s == "-6")
-			g_DecompressFlags = 6;
-		else if(s == "-separate")
-			g_bSeparate = true;
-		else if(s == "-col-only")
-		{
-			g_bColOnly = true;
-			g_bMulOnly = false;
-			g_bSeparate = true;
-		}
-		else if(s == "-mul-only")
-		{
-			g_bMulOnly = true;
-			g_bColOnly = false;
-			g_bSeparate = true;
-		}
-		else if(s == "-nopiece")
-			g_bPieceTogether = false;
-		else if(s == "-piece")
-			g_bPieceTogether = true;
-		else
-			sFilenames.push_back(s);
+		sFilenames.push_back(s);
 	}
 	//Decompress ANB files
 	for(list<string>::iterator i = sFilenames.begin(); i != sFilenames.end(); i++)
