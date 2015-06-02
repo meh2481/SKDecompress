@@ -227,43 +227,29 @@ FIBITMAP* PieceImage(uint8_t* imgData, list<piece> pieces, Vec2 maxul, Vec2 maxb
 	return cropped;
 }
 
-list<piece> imgPieces;
-texVert imgHeader;
-int iCurFile;
+vector<list<piece> > imgPieces;
+vector<texVert> imgHeader;
+//int iCurFile;
+int iNumFiles;
 string sCurFileName;
+Vec2 maxul;
+Vec2 maxbr;
 
-void saveCurImage(uint8_t* data)
+void saveImage(uint8_t* data, int iFile)
 {
-	if(!imgPieces.size()) return;	//Sanity check if first image
-	
-	//Figure out pieces
-	Vec2 maxul;
-	Vec2 maxbr;
-	maxul.x = maxul.y = maxbr.x = maxbr.y = 0;
-	for(list<piece>::iterator i = imgPieces.begin(); i != imgPieces.end(); i++)
-	{
-		//Store our maximum values, so we know how large the image is
-		if(i->bottomLeft.x < maxul.x)
-			maxul.x = i->bottomLeft.x;
-		if(i->topRight.y > maxul.y)
-			maxul.y = i->topRight.y;
-		if(i->topRight.x > maxbr.x)
-			maxbr.x = i->topRight.x;
-		if(i->bottomLeft.y < maxbr.y)
-			maxbr.y = i->bottomLeft.y;
-	}
+	//if(!imgPieces.size()) return;	//Sanity check if first image
 	
 	//Decompress WFLZ data - one pass now, no chunks
-	const uint32_t decompressedSize = wfLZ_GetDecompressedSize(&(data[imgHeader.dataPtr+sizeof(texHeader)]));
+	const uint32_t decompressedSize = wfLZ_GetDecompressedSize(&(data[imgHeader[iFile].dataPtr+sizeof(texHeader)]));
 	uint8_t* dst = (uint8_t*)malloc(decompressedSize);
-	wfLZ_Decompress(&(data[imgHeader.dataPtr+sizeof(texHeader)]), dst);
+	wfLZ_Decompress(&(data[imgHeader[iFile].dataPtr+sizeof(texHeader)]), dst);
 	
 	ostringstream oss;
-	oss << "output/" << sCurFileName << '/' << setfill('0') << setw(3) << iCurFile+1 << ".png";
+	oss << "output/" << sCurFileName << '/' << setfill('0') << setw(3) << iFile+1 << ".png";
 	cout << "Saving " << oss.str() << endl;
 	
 	//Piece together
-	FIBITMAP* result = PieceImage(dst, imgPieces, maxul, maxbr, imgHeader);//imageFromPixels(dst, imgHeader.width, imgHeader.height);
+	FIBITMAP* result = PieceImage(dst, imgPieces[iFile], maxul, maxbr, imgHeader[iFile]);//imageFromPixels(dst, imgHeader.width, imgHeader.height);
 	
 	FreeImage_Save(FIF_PNG, result, oss.str().c_str());
 	
@@ -274,8 +260,8 @@ void saveCurImage(uint8_t* data)
 	FreeImage_Unload(result);
 	free(dst);
 	
-	iCurFile++;
-	imgPieces.clear();	//New frame, new pieces
+	//iCurFile++;
+	//imgPieces.clear();	//New frame, new pieces
 }
 
 void checkVert(dataVert v, uint8_t* data, uint32_t offset)
@@ -291,7 +277,7 @@ void checkVert(dataVert v, uint8_t* data, uint32_t offset)
 		{
 			texVert tv;
 			memcpy(&tv, &(data[nodeExtOffset]), sizeof(texVert));
-			imgHeader = tv;	//Save header
+			imgHeader.push_back(tv);	//Save header
 			//cout << "texVert - width: " << tv.width << ", height: " << tv.height << ", flags: " << tv.flags << ", data ptr: 0x" << std::hex << tv.dataPtr << endl;
 			//cout << std::dec;
 		}
@@ -307,6 +293,7 @@ void checkVert(dataVert v, uint8_t* data, uint32_t offset)
 			pieceHeader ph;
 			memcpy(&ph, &(data[vv.dataPtr]), sizeof(pieceHeader));
 			
+			list<piece> pcs;
 			for(int i = 0; i < vv.num; i++)
 			{
 				piece p;
@@ -319,16 +306,19 @@ void checkVert(dataVert v, uint8_t* data, uint32_t offset)
 				p.bottomLeft.y = (int)(p.bottomLeft.y * 10.0f + 0.5f);
 				
 				//Store piece
-				imgPieces.push_back(p);
+				pcs.push_back(p);
 				
 				//cout << "Piece: " << p.topRight.x << ", " << p.topRight.y << " " << p.bottomLeft.x << ", " << p.bottomLeft.y << " - " << p.topRightUV.x << ", " << p.topRightUV.y << " " << p.bottomLeftUV.x << ", " << p.bottomLeftUV.y << endl;
 			}
+			imgPieces.push_back(pcs);
 		}
 		break;
 		
 		case VERT_TYPE_FRAME:
 		{
-			saveCurImage(data);	//Save our last image (works because we're traversing depth-first)
+			//saveCurImage(data);	//Save our last image (works because we're traversing depth-first)
+			//iCurFile++;
+			iNumFiles++;
 		}
 		break;
 		
@@ -416,11 +406,33 @@ int splitImages(const char* cFilename)
 	memcpy(&ah, fileData, sizeof(anbHeader));
 	
 	//Cycle through ANB data pointer tree
-	iCurFile = 0;
+	//iCurFile = -1;
 	imgPieces.clear();
+	imgHeader.clear();
 	sCurFileName = sName;
+	maxul.x = maxul.y = maxbr.x = maxbr.y = 0;
+	iNumFiles = 0;
 	iterateChild(fileData, ah.head, 0, 16);		//Workhorse: Spin through ANB data tree
-	saveCurImage(fileData);	//Save our last image left
+	
+	for(int iCurFile = 0; iCurFile < iNumFiles; iCurFile++)
+	{
+		//Figure out pieces
+		for(list<piece>::iterator i = imgPieces[iCurFile].begin(); i != imgPieces[iCurFile].end(); i++)
+		{
+			//Store our maximum values, so we know how large the image is
+			if(i->bottomLeft.x < maxul.x)
+				maxul.x = i->bottomLeft.x;
+			if(i->topRight.y > maxul.y)
+				maxul.y = i->topRight.y;
+			if(i->topRight.x > maxbr.x)
+				maxbr.x = i->topRight.x;
+			if(i->bottomLeft.y < maxbr.y)
+				maxbr.y = i->bottomLeft.y;
+		}
+	}
+	
+	for(int iCurFile = 0; iCurFile < iNumFiles; iCurFile++)
+		saveImage(fileData, iCurFile);	//Save our images
 	
 	//Parse through, splitting out before each WFLZ header
 	/*int iCurFile = 0;
