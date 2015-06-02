@@ -18,16 +18,6 @@
 #include <iomanip>
 using namespace std;
 
-int g_DecompressFlags;
-bool g_bSeparate;
-bool g_bPieceTogether;
-bool g_bColOnly;
-bool g_bMulOnly;
-
-int offsetX = 2;
-int offsetY = 2;
-
-
 typedef struct
 {
 	uint32_t type;
@@ -151,10 +141,15 @@ vector<list<piece> > imgPieces;
 vector<texVert> imgHeader;
 int iNumFiles;
 string sCurFileName;
-//Vec2 maxul;
-//Vec2 maxbr;
 int iNumFrameSequences;
 vector<list<frame> > frameSequences;
+
+bool g_bGreenBg;
+bool g_bCreateIcon;
+int offsetX = 2;
+int offsetY = 2;
+int iconW = 148;
+int iconH = 125;
 
 //-------------------------------------------------------------------------------------------------------
 // Functions
@@ -184,7 +179,7 @@ FIBITMAP* imageFromPixels(uint8_t* imgData, uint32_t width, uint32_t height)
 			BYTE* pixel = (BYTE*)bits;
 			for(int x = 0; x < width; x++)
 			{
-				if(imgData[curPos+3] == 0)
+				if(g_bGreenBg && imgData[curPos+3] == 0)
 				{
 					pixel[FI_RGBA_RED] = 0;
 					pixel[FI_RGBA_GREEN] = 255;
@@ -220,8 +215,12 @@ FIBITMAP* PieceImage(uint8_t* imgData, list<piece> pieces, Vec2 maxul, Vec2 maxb
 
 	//My math seems off, so rather than solving the problem, create larger than needed, then crop. Hooray!
 	FIBITMAP* result = FreeImage_Allocate(OutputSize.x+6, OutputSize.y+6, 32);
-	RGBQUAD q = {0,255,0,255};
-	FreeImage_FillBackground(result, (const void *)&q);
+	
+	if(g_bGreenBg)
+	{
+		RGBQUAD q = {0,255,0,255};
+		FreeImage_FillBackground(result, (const void *)&q);
+	}
 
 	//Create image from this set of pixels
 	FIBITMAP* curImg = imageFromPixels(imgData, th.width, th.height);
@@ -470,6 +469,7 @@ int splitImages(const char* cFilename)
 	iNumFrameSequences = 0;
 	iterateChild(fileData, ah.head, 0, 16);		//Workhorse: Spin through ANB data tree
 	
+	//Find max anim sizes for each sequence
 	animSizes.reserve(imgPieces.size());
 	for(int iCurFile = 0; iCurFile < iNumFiles; iCurFile++)
 	{
@@ -529,6 +529,44 @@ int splitImages(const char* cFilename)
 		}
 	}*/
 	
+	//Create icon
+	if(g_bCreateIcon)
+	{
+		bool bTemp = g_bGreenBg;
+		g_bGreenBg = false;	//We want a transparent bg on our icon
+		
+		list<frame>::iterator firstSeq = frameSequences[0].begin();
+		FIBITMAP* icon = decompressFrame(fileData, firstSeq->frameNo);	//Grab the first image of the first frame sequence
+		if(FreeImage_GetWidth(icon) * 2 < iconW && FreeImage_GetHeight(icon) * 2 < iconH)	//Can scale up by a factor of 2 safely
+		{
+			FIBITMAP* rescaled = FreeImage_Rescale(icon, FreeImage_GetWidth(icon) * 2, FreeImage_GetHeight(icon) * 2, FILTER_BOX);
+			FreeImage_Unload(icon);
+			icon = rescaled;
+		}
+		else if(FreeImage_GetWidth(icon) > iconW || FreeImage_GetHeight(icon) > iconH)	//Need to scale down
+		{
+			FIBITMAP* rescaled = FreeImage_MakeThumbnail(icon, iconH);
+			FreeImage_Unload(icon);
+			icon = rescaled;
+		}
+		
+		int left = floor((float)(iconW - FreeImage_GetWidth(icon))/2);
+		int right = ceil((float)(iconW - FreeImage_GetWidth(icon))/2);
+		int top = floor((float)(iconH - FreeImage_GetHeight(icon))/2);
+		int bottom = ceil((float)(iconH - FreeImage_GetHeight(icon))/2);
+		
+		RGBQUAD q = {0,0,0,0};
+		FIBITMAP* resized = FreeImage_EnlargeCanvas(icon, left, top, right, bottom, &q, FI_COLOR_IS_RGB_COLOR);	//Resize to 148x125
+		FreeImage_Unload(icon);
+		icon = resized;
+	
+		ostringstream oss;
+		oss << "output/" << sCurFileName << "_icon.png";
+		cout << "Saving " << oss.str() << endl;
+		FreeImage_Save(FIF_PNG, icon, oss.str().c_str());
+		g_bGreenBg = bTemp;
+	}
+	
 	//Decompress and piece all images up front
 	vector<FIBITMAP*> frameImages;
 	for(int i = 0; i < iNumFiles; i++)
@@ -587,25 +625,30 @@ int splitImages(const char* cFilename)
 	ostringstream oss;
 	oss << "output/" << sCurFileName << "_sheet.png";
 	cout << "Saving " << oss.str() << endl;
-	FIBITMAP* res_24 = FreeImage_ConvertTo24Bits(finalSheet);
-	FreeImage_Save(FIF_PNG, res_24, oss.str().c_str());
+	FIBITMAP* res_24;
+	if(g_bGreenBg)
+	{
+		res_24 = FreeImage_ConvertTo24Bits(finalSheet);
+		FreeImage_Save(FIF_PNG, res_24, oss.str().c_str());
+	}
+	else
+		FreeImage_Save(FIF_PNG, finalSheet, oss.str().c_str());
 	
 	//Free our image data
 	for(vector<FIBITMAP*>::iterator i = frameImages.begin(); i != frameImages.end(); i++)
 		FreeImage_Unload(*i);
 	
 	FreeImage_Unload(finalSheet);
-	FreeImage_Unload(res_24);
+	if(g_bGreenBg)
+		FreeImage_Unload(res_24);
 	delete[] fileData;
 	return 0;
 }
 
 int main(int argc, char** argv)
 {
-	g_DecompressFlags = -1;
-	g_bSeparate = false;
-	g_bPieceTogether = true;
-	g_bColOnly = g_bMulOnly = false;
+	g_bGreenBg = true;
+	g_bCreateIcon = true;
 	FreeImage_Initialise();
 #ifdef _WIN32
 	CreateDirectory(TEXT("output"), NULL);
