@@ -623,7 +623,7 @@ int splitImages(const char* cFilename)
 		curY += animMaxY + offsetY;
 	}
 	ostringstream oss;
-	oss << "output/" << sCurFileName << "_sheet.png";
+	oss << "output/" << sCurFileName << ".png";
 	cout << "Saving " << oss.str() << endl;
 	FIBITMAP* res_24;
 	if(g_bGreenBg)
