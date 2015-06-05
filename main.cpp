@@ -126,15 +126,6 @@ typedef struct
 	Vec2 bottomLeftUV;
 } piece;
 
-//Helper struct for filling out a FIBITMAP
-typedef struct
-{
-	uint8_t r;
-	uint8_t g;
-	uint8_t b;
-	uint8_t a;
-} pixel;
-
 
 vector<frameVert> animSizes;	//How large the largest piece in every anim is
 vector<list<piece> > imgPieces;
@@ -233,6 +224,7 @@ FIBITMAP* PieceImage(uint8_t* imgData, list<piece> pieces, Vec2 maxul, Vec2 maxb
 											(int)((lpi->topRightUV.x) * th.width + 0.5), (int)((lpi->bottomLeftUV.y) * th.height + 0.5));
 		
 		//Since pasting doesn't allow you to post an image onto a particular position of another, do that by hand
+		//TODO: That's a false statement. Let FreeImage handle image pasting
 		int curPos = 0;
 		int srcW = FreeImage_GetWidth(imgPiece);
 		int srcH = FreeImage_GetHeight(imgPiece);
@@ -276,17 +268,10 @@ FIBITMAP* PieceImage(uint8_t* imgData, list<piece> pieces, Vec2 maxul, Vec2 maxb
 	return cropped;
 }
 
+FIBITMAP* last;
+uint8_t* dst = NULL;
 FIBITMAP* decompressFrame(uint8_t* data, int iFile)
 {
-	if(imgPieces.size() <= iFile || imgHeader.size() <= iFile) return NULL;	//Skip if we don't have enough headers...
-	if(imgHeader[iFile].width <= 0 || imgHeader[iFile].height <= 0 || imgHeader[iFile].dataPtr <= 0) return NULL;	//Skip if it's not a legit header
-
-	//Decompress WFLZ data - one pass now, no chunks
-	const uint32_t decompressedSize = wfLZ_GetDecompressedSize(&(data[imgHeader[iFile].dataPtr+sizeof(texHeader)]));
-	uint8_t* dst = (uint8_t*)malloc(decompressedSize);
-	wfLZ_Decompress(&(data[imgHeader[iFile].dataPtr+sizeof(texHeader)]), dst);
-	
-	//Piece together
 	frameVert fv = animSizes[iFile];
 	Vec2 maxUL;
 	Vec2 maxBR;
@@ -294,13 +279,25 @@ FIBITMAP* decompressFrame(uint8_t* data, int iFile)
 	maxUL.y = fv.maxy;
 	maxBR.x = fv.maxx;
 	maxBR.y = fv.miny;
+
+	if(imgPieces.size() <= iFile || imgHeader.size() <= iFile) return NULL;	//Skip if we don't have enough headers...
+	if(imgHeader[iFile].width <= 0 || imgHeader[iFile].height <= 0 || imgHeader[iFile].dataPtr <= 0) //If it's not a legit header, means all image data was in first one
+	{
+		FIBITMAP* result = PieceImage(dst, imgPieces[iFile], maxUL, maxBR, imgHeader[0]);
+		return result;
+	}
+
+	//Decompress WFLZ data - one pass now, no chunks
+	const uint32_t decompressedSize = wfLZ_GetDecompressedSize(&(data[imgHeader[iFile].dataPtr+sizeof(texHeader)]));
+	if(dst)
+		free(dst);
+	dst = (uint8_t*)malloc(decompressedSize);
+	wfLZ_Decompress(&(data[imgHeader[iFile].dataPtr+sizeof(texHeader)]), dst);
 	
-	//cout << "maxUL: " << maxUL.x << ", " << maxUL.y << " " << maxBR.x << ", " << maxBR.y << endl;
-	//cout << "maxul: " << maxul.x << ", " << maxul.y << " " << maxbr.x << ", " << maxbr.y << endl;
-	
+	//Piece together	
 	FIBITMAP* result = PieceImage(dst, imgPieces[iFile], maxUL, maxBR, imgHeader[iFile]);
 	
-	free(dst);
+	last = result;
 	return result;
 }
 
@@ -446,15 +443,6 @@ int splitImages(const char* cFilename)
 	if(namepos != string::npos)
 		sName.erase(0, namepos+1);
 		
-	//Create the folder we'll be saving into
-	/*#ifdef _WIN32
-		string sOutDir = "output/";
-		sOutDir += sName;
-		CreateDirectory(TEXT(sOutDir.c_str()), NULL);
-	#else
-		#error Do something here to create folder
-	#endif*/
-		
 	//Read file header
 	anbHeader ah;
 	memcpy(&ah, fileData, sizeof(anbHeader));
@@ -463,7 +451,6 @@ int splitImages(const char* cFilename)
 	imgPieces.clear();
 	imgHeader.clear();
 	sCurFileName = sName;
-	//maxul.x = maxul.y = maxbr.x = maxbr.y = 0;
 	iNumFiles = 0;
 	frameSequences.clear();
 	iNumFrameSequences = 0;
@@ -507,27 +494,9 @@ int splitImages(const char* cFilename)
 				animSizes[j->frameNo].maxx = fv.maxx;
 			if(fv.maxy > animSizes[j->frameNo].maxy)
 				animSizes[j->frameNo].maxy = fv.maxy;
-			
-			//animSizes[j->frameNo] = fv;
 		}
 		
 	}
-	
-	/*for(int iCurFile = 0; iCurFile < iNumFiles; iCurFile++)
-	{
-		for(list<piece>::iterator i = imgPieces[iCurFile].begin(); i != imgPieces[iCurFile].end(); i++)
-		{
-			//Store our maximum values, so we know how large the image is
-			if(i->bottomLeft.x < maxul.x)
-				maxul.x = i->bottomLeft.x;
-			if(i->topRight.y > maxul.y)
-				maxul.y = i->topRight.y;
-			if(i->topRight.x > maxbr.x)
-				maxbr.x = i->topRight.x;
-			if(i->bottomLeft.y < maxbr.y)
-				maxbr.y = i->bottomLeft.y;
-		}
-	}*/
 	
 	//Create icon
 	if(g_bCreateIcon)
@@ -597,7 +566,6 @@ int splitImages(const char* cFilename)
 	}
 	
 	//Allocate final image, and piece
-	//cout << "Final image: " << finalX << ", " << finalY << endl;
 	FIBITMAP* finalSheet = FreeImage_Allocate(finalX, finalY, 32);
 	RGBQUAD q = {128,128,0,255};
 	FreeImage_FillBackground(finalSheet, (const void *)&q);
@@ -666,5 +634,7 @@ int main(int argc, char** argv)
 	for(list<string>::iterator i = sFilenames.begin(); i != sFilenames.end(); i++)
 		splitImages((*i).c_str());
 	FreeImage_DeInitialise();
+	if(dst)
+		free(dst);
 	return 0;
 }
