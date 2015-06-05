@@ -270,6 +270,8 @@ FIBITMAP* PieceImage(uint8_t* imgData, list<piece> pieces, Vec2 maxul, Vec2 maxb
 
 FIBITMAP* last;
 uint8_t* dst = NULL;
+bool bFileHit = false;
+bool bRedo = false;
 FIBITMAP* decompressFrame(uint8_t* data, int iFile)
 {
 	frameVert fv = animSizes[iFile];
@@ -283,7 +285,17 @@ FIBITMAP* decompressFrame(uint8_t* data, int iFile)
 	if(imgPieces.size() <= iFile || imgHeader.size() <= iFile) return NULL;	//Skip if we don't have enough headers...
 	if(imgHeader[iFile].width <= 0 || imgHeader[iFile].height <= 0 || imgHeader[iFile].dataPtr <= 0) //If it's not a legit header, means all image data was in first one
 	{
+		if(!dst)
+		{
+			bRedo = true;
+			return NULL;
+		}
 		FIBITMAP* result = PieceImage(dst, imgPieces[iFile], maxUL, maxBR, imgHeader[0]);
+		if(!bFileHit)
+		{
+			bFileHit = true;
+			cout << "FILE HIT" << endl;
+		}
 		return result;
 	}
 
@@ -414,6 +426,8 @@ void iterateChild(uint8_t* data, dataVert v, int level, uint32_t offset)
 
 int splitImages(const char* cFilename)
 {
+	bFileHit = false;
+	bRedo = false;
 	uint8_t* fileData;
 	FILE* fh = fopen( cFilename, "rb" );
 	if(fh == NULL)
@@ -498,6 +512,19 @@ int splitImages(const char* cFilename)
 		
 	}
 	
+	//Decompress and piece all images up front
+	vector<FIBITMAP*> frameImages;
+	for(int i = 0; i < iNumFiles; i++)
+		frameImages.push_back(decompressFrame(fileData, i));
+	
+	//There's a chance that the first header actually DOESN'T have the image; one of the later ones will, so loop through again
+	if(bRedo)
+	{
+		frameImages.clear();
+		for(int i = 0; i < iNumFiles; i++)
+			frameImages.push_back(decompressFrame(fileData, i));
+	}
+	
 	//Create icon
 	if(g_bCreateIcon)
 	{
@@ -534,13 +561,6 @@ int splitImages(const char* cFilename)
 		cout << "Saving " << oss.str() << endl;
 		FreeImage_Save(FIF_PNG, icon, oss.str().c_str());
 		g_bGreenBg = bTemp;
-	}
-	
-	//Decompress and piece all images up front
-	vector<FIBITMAP*> frameImages;
-	for(int i = 0; i < iNumFiles; i++)
-	{
-		frameImages.push_back(decompressFrame(fileData, i));
 	}
 		
 	//Figure out dimensions of final image
@@ -610,6 +630,12 @@ int splitImages(const char* cFilename)
 	if(g_bGreenBg)
 		FreeImage_Unload(res_24);
 	delete[] fileData;
+	
+	if(dst)
+	{
+		free(dst);
+		dst = NULL;
+	}
 	return 0;
 }
 
@@ -634,7 +660,5 @@ int main(int argc, char** argv)
 	for(list<string>::iterator i = sFilenames.begin(); i != sFilenames.end(); i++)
 		splitImages((*i).c_str());
 	FreeImage_DeInitialise();
-	if(dst)
-		free(dst);
 	return 0;
 }
