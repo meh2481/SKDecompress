@@ -118,12 +118,23 @@ typedef struct
 	float y;
 } Vec2;
 
-typedef struct 
+typedef struct
+{
+	uint16_t x;
+	uint16_t y;
+} VecInt;
+/*typedef struct 
 {
 	Vec2 topRight;
 	Vec2 bottomLeft;
 	Vec2 topRightUV;
 	Vec2 bottomLeftUV;
+} piece;*/
+typedef struct
+{
+	Vec2 topLeft;
+	VecInt topLeftUV;
+	uint16_t width, height;
 } piece;
 
 
@@ -154,6 +165,18 @@ int powerof2(int orig)
 	return result;
 }
 
+/*FIBITMAP* imageFromPixels(uint8_t* imgData, uint32_t width, uint32_t height)
+{
+	//FreeImage is broken here and you can't swap R/G/B channels upon creation. Do that manually
+	FIBITMAP* result = FreeImage_ConvertFromRawBits(imgData, width, height, ((((32 * width) + 31) / 32) * 4), 32, FI_RGBA_RED, FI_RGBA_GREEN, FI_RGBA_BLUE, true);
+	FIBITMAP* r = FreeImage_GetChannel(result, FICC_RED);
+	FIBITMAP* b = FreeImage_GetChannel(result, FICC_BLUE);
+	FreeImage_SetChannel(result, b, FICC_RED);
+	FreeImage_SetChannel(result, r, FICC_BLUE);
+	FreeImage_Unload(r);
+	FreeImage_Unload(b);
+	return result;
+}*/
 FIBITMAP* imageFromPixels(uint8_t* imgData, uint32_t width, uint32_t height)
 {
 	//return FreeImage_ConvertFromRawBits(imgData, width, height, width*4, 32, 0xFF0000, 0x00FF00, 0x0000FF, true);	//Doesn't seem to work
@@ -198,14 +221,14 @@ FIBITMAP* PieceImage(uint8_t* imgData, list<piece> pieces, Vec2 maxul, Vec2 maxb
 	Vec2 OutputSize;
 	Vec2 CenterPos;
 	OutputSize.x = -maxul.x + maxbr.x;
-	OutputSize.y = maxul.y - maxbr.y;
-	CenterPos.x = -maxul.x;
-	CenterPos.y = maxul.y;
-	OutputSize.x = uint32_t(OutputSize.x);
-	OutputSize.y = uint32_t(OutputSize.y);
+	OutputSize.y = -maxul.y + maxbr.y;
+	CenterPos.x = -maxul.x + 50;
+	CenterPos.y = -maxul.y + 50;
+	//OutputSize.x = uint32_t(OutputSize.x);
+	//OutputSize.y = uint32_t(OutputSize.y);
 
 	//My math seems off, so rather than solving the problem, create larger than needed, then crop. Hooray!
-	FIBITMAP* result = FreeImage_Allocate(OutputSize.x+6, OutputSize.y+6, 32);
+	FIBITMAP* result = FreeImage_Allocate(OutputSize.x+100, OutputSize.y+100, 32);
 	
 	if(g_bGreenBg)
 	{
@@ -219,11 +242,21 @@ FIBITMAP* PieceImage(uint8_t* imgData, list<piece> pieces, Vec2 maxul, Vec2 maxb
 	//Patch image together from pieces
 	for(list<piece>::iterator lpi = pieces.begin(); lpi != pieces.end(); lpi++)
 	{
-		FIBITMAP* imgPiece = FreeImage_Copy(curImg, 
-											(int)((lpi->bottomLeftUV.x) * th.width + 0.5), (int)((lpi->topRightUV.y) * th.height + 0.5), 
-											(int)((lpi->topRightUV.x) * th.width + 0.5), (int)((lpi->bottomLeftUV.y) * th.height + 0.5));
+		//cout << "Top left: " << lpi->topLeft.x << "," << lpi->topLeft.y << endl;
+		//cout << "Top left UV: " << lpi->topLeftUV.x << "," << lpi->topLeftUV.y << endl;
+		//cout << "w/h: " << lpi->width << "," << lpi->height << endl;
+		//cout << "center: " << CenterPos.x << "," << CenterPos.y << endl;
+		//cout << "maxul/br: " << maxul.x << "," << maxul.y << " " << maxbr.x << "," << maxbr.y << endl;
 		
-		//Since pasting doesn't allow you to post an image onto a particular position of another, do that by hand
+		FIBITMAP* imgPiece = FreeImage_Copy(curImg, 
+											lpi->topLeftUV.x, lpi->topLeftUV.y, 
+											lpi->topLeftUV.x + lpi->width, lpi->topLeftUV.y + lpi->height);
+						
+		FreeImage_Paste(result, imgPiece, CenterPos.x + lpi->topLeft.x, CenterPos.y + lpi->topLeft.y, 255);
+		
+		//return imgPiece;
+		
+		/*/Since pasting doesn't allow you to post an image onto a particular position of another, do that by hand
 		//TODO: That's a false statement. Let FreeImage handle image pasting
 		int curPos = 0;
 		int srcW = FreeImage_GetWidth(imgPiece);
@@ -233,10 +266,10 @@ FIBITMAP* PieceImage(uint8_t* imgData, list<piece> pieces, Vec2 maxul, Vec2 maxb
 		BYTE* bits = (BYTE*)FreeImage_GetBits(imgPiece);
 		BYTE* destBits = (BYTE*)FreeImage_GetBits(result);
 		Vec2 DestPos = CenterPos;
-		DestPos.x += lpi->bottomLeft.x;
+		DestPos.x += lpi->topLeft.x;
 		DestPos.y = OutputSize.y - srcH;
 		DestPos.y -= CenterPos.y;
-		DestPos.y += lpi->topRight.y;
+		DestPos.y += lpi->topLeft.y;
 		DestPos.x = (unsigned int)(DestPos.x);
 		DestPos.y = ceil(DestPos.y);
 		for(int y = 0; y < srcH; y++)
@@ -255,17 +288,18 @@ FIBITMAP* PieceImage(uint8_t* imgData, list<piece> pieces, Vec2 maxul, Vec2 maxb
 				destpixel += 4;
 			}
 			bits += pitch;
-		}
+		}*/
 		
 		FreeImage_Unload(imgPiece);
 	}
 	FreeImage_Unload(curImg);
 	
 	//Crop edges from final image
-	FIBITMAP* cropped = FreeImage_Copy(result, 3, 3, FreeImage_GetWidth(result)-2, FreeImage_GetHeight(result)-2);
+	FIBITMAP* cropped = FreeImage_Copy(result, 50, 50, FreeImage_GetWidth(result)-50, FreeImage_GetHeight(result)-50);
 	FreeImage_Unload(result);
 	
 	return cropped;
+	//return result;
 }
 
 FIBITMAP* last;
@@ -278,9 +312,9 @@ FIBITMAP* decompressFrame(uint8_t* data, int iFile)
 	Vec2 maxUL;
 	Vec2 maxBR;
 	maxUL.x = fv.minx;
-	maxUL.y = fv.maxy;
+	maxUL.y = fv.miny;
 	maxBR.x = fv.maxx;
-	maxBR.y = fv.miny;
+	maxBR.y = fv.maxy;
 
 	if(imgPieces.size() <= iFile || imgHeader.size() <= iFile) return NULL;	//Skip if we don't have enough headers...
 	if(imgHeader[iFile].width <= 0 || imgHeader[iFile].height <= 0 || imgHeader[iFile].dataPtr <= 0) //If it's not a legit header, means all image data was in first one
@@ -294,7 +328,7 @@ FIBITMAP* decompressFrame(uint8_t* data, int iFile)
 		if(!bFileHit)
 		{
 			bFileHit = true;
-			cout << "FILE HIT" << endl;
+			//cout << "FILE HIT" << endl;
 		}
 		return result;
 	}
@@ -346,16 +380,17 @@ void checkVert(dataVert v, uint8_t* data, uint32_t offset)
 				piece p;
 				memcpy(&p, &(data[vv.dataPtr+sizeof(pieceHeader)+i*sizeof(piece)]), sizeof(piece));
 				
-				//Coordinates are scaled; multiply by 10 and hope it works
-				p.topRight.x = (int)(p.topRight.x * 10.0f + 0.5f);
-				p.topRight.y = (int)(p.topRight.y * 10.0f + 0.5f);
-				p.bottomLeft.x = (int)(p.bottomLeft.x * 10.0f + 0.5f);
-				p.bottomLeft.y = (int)(p.bottomLeft.y * 10.0f + 0.5f);
+				//Coordinates are scaled; divide by 10 and hope it works
+				//p.topLeft.x = p.topLeft.x;// / 10.0f;
+				//p.topLeft.y = p.topLeft.y;// / 10.0f;
+				//p.topRight.y = (int)(p.topRight.y * 10.0f + 0.5f);
+				//p.topLeft.x = (int)(p.topLeft.x * 10.0f + 0.5f);
+				//p.topLeft.y = (int)(p.topLeft.y * 10.0f + 0.5f);
 				
 				//Store piece
 				pcs.push_back(p);
 				
-				//cout << "Piece: " << p.topRight.x << ", " << p.topRight.y << " " << p.bottomLeft.x << ", " << p.bottomLeft.y << " - " << p.topRightUV.x << ", " << p.topRightUV.y << " " << p.bottomLeftUV.x << ", " << p.bottomLeftUV.y << endl;
+				//cout << "Piece: " << p.topLeft.x << "," << p.topLeft.y << " " << p.topLeftUV.x << "," << p.topLeftUV.y << " - " << p.width << ", " << p.height << endl;// << " " << p.bottomLeftUV.x << ", " << p.bottomLeftUV.y << endl;
 			}
 			imgPieces.push_back(pcs);
 		}
@@ -392,6 +427,7 @@ void checkVert(dataVert v, uint8_t* data, uint32_t offset)
 			//memcpy(&fv, &(data[nodeExtOffset]), sizeof(frameVert));
 			
 			//cout << "FrameVert - minx: " << fv.minx << ", maxx: " << fv.maxx << ", miny: " << fv.miny << ", maxy: " << fv.maxy << endl;
+			//animSizes.push_back(fv);
 		}
 		break;
 		
@@ -488,14 +524,14 @@ int splitImages(const char* cFilename)
 			for(list<piece>::iterator k = imgPieces[j->frameNo].begin(); k != imgPieces[j->frameNo].end(); k++)
 			{
 				//Store our maximum values, so we know how large the image is
-				if(k->bottomLeft.x < fv.minx)
-					fv.minx = k->bottomLeft.x;
-				if(k->topRight.y > fv.maxy)
-					fv.maxy = k->topRight.y;
-				if(k->topRight.x > fv.maxx)
-					fv.maxx = k->topRight.x;
-				if(k->bottomLeft.y < fv.miny)
-					fv.miny = k->bottomLeft.y;
+				if(k->topLeft.x < fv.minx)
+					fv.minx = k->topLeft.x;
+				if(k->topLeft.y < fv.miny)
+					fv.miny = k->topLeft.y;
+				if(k->topLeft.x + k->width > fv.maxx)
+					fv.maxx = k->topLeft.x + k->width;
+				if(k->topLeft.y + k->height > fv.maxy)
+					fv.maxy = k->topLeft.y + k->height;
 			}
 		}
 		for(list<frame>::iterator j = frameSequences[i].begin(); j != frameSequences[i].end(); j++)
